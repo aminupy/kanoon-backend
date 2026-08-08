@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_DB: kanoon_test
+          POSTGRES_USER: kanoon_owner
+          POSTGRES_PASSWORD: kanoon_owner
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kanoon_owner -d kanoon_test"
+          --health-interval 2s --health-timeout 3s --health-retries 20
+    env:
+      KANOON_ENVIRONMENT: testing
+      KANOON_DATABASE_DSN: postgresql+psycopg://kanoon_owner:kanoon_owner@localhost:5432/kanoon_test
+      KANOON_TEST_DATABASE_DSN: postgresql+psycopg://kanoon_owner:kanoon_owner@localhost:5432/kanoon_test
+      KANOON_SIGNING_KEY: ci-only-signing-key-with-at-least-32-characters
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.33"
+          enable-cache: true
+      - run: uv sync --frozen --all-groups
+      - run: uv run ruff format --check app tests migrations
+      - run: uv run ruff check app tests migrations
+      - run: uv run mypy app tests
+      - run: uv run alembic upgrade head
+      - run: uv run alembic check
+      - run: uv run pytest -q

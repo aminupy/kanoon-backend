@@ -1,0 +1,7 @@
+# Replace storage.example.com with KANOON_S3_PUBLIC_ENDPOINT_URL's hostname.
+storage.example.com {
+    reverse_proxy http://storage.abhp.internal:8333 {
+        # SigV4 includes Host. SeaweedFS must receive the public host that was signed.
+        header_up Host {host}
+    }
+}

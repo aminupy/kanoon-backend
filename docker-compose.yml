@@ -1,3 +1,5 @@
+name: kanoon
+
 services:
   postgres:
     image: postgres:17.6-alpine
@@ -5,99 +7,125 @@ services:
       POSTGRES_DB: kanoon
       POSTGRES_USER: kanoon_owner
       POSTGRES_PASSWORD: kanoon_owner
+
     ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U kanoon_owner -d kanoon"]
-      interval: 2s
-      timeout: 3s
-      retries: 20
+      - "127.0.0.1:5432:5432"
+
     volumes:
       - kanoon-postgres:/var/lib/postgresql/data
 
-  minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - "7000:9000"
-      - "7001:9001"
-    volumes:
-      - kanoon-minio:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U kanoon_owner -d kanoon
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+    restart: unless-stopped
+
 
   backend:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+
     image: kanoon-backend:local
-    env_file: .env
+
+    env_file:
+      - .env
+
     environment:
       KANOON_DATABASE_DSN: postgresql+psycopg://kanoon_owner:kanoon_owner@postgres:5432/kanoon
-      KANOON_S3_ENDPOINT_URL: http://minio:9000
+      KANOON_S3_ENDPOINT_URL: ${KANOON_S3_ENDPOINT_URL:?set the internal SeaweedFS S3 URL}
+      KANOON_S3_PUBLIC_ENDPOINT_URL: ${KANOON_S3_PUBLIC_ENDPOINT_URL:?set the public SeaweedFS S3 URL}
+
       KANOON_DATA_PLANE_HOST: 0.0.0.0
-      KANOON_DATA_PLANE_PORT: 8000
+      KANOON_DATA_PLANE_PORT: "8000"
+
     depends_on:
       postgres:
         condition: service_healthy
-      minio:
-        condition: service_started
+
     ports:
       - "8000:8000"
+
     restart: unless-stopped
+
     healthcheck:
       test:
-        [
-          "CMD",
-          "uv",
-          "run",
-          "--no-sync",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)",
-        ]
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen(
+          'http://127.0.0.1:8000/health/live',
+          timeout=2
+          )
       interval: 10s
       timeout: 3s
       retries: 5
+      start_period: 5s
+
 
   backend-control-plane:
-    build: .
     image: kanoon-backend:local
-    command: ["uv", "run", "--no-sync", "kanoon", "serve-control-plane"]
+
+    command:
+      - kanoon
+      - serve-control-plane
+
+    env_file:
+      - .env
+
     environment:
       KANOON_ENVIRONMENT: ${KANOON_ENVIRONMENT:-development}
       KANOON_DEBUG: ${KANOON_DEBUG:-false}
+
       KANOON_DATABASE_DSN: postgresql+psycopg://kanoon_owner:kanoon_owner@postgres:5432/kanoon
       KANOON_DATABASE_APPLICATION_ROLE: ${KANOON_DATABASE_APPLICATION_ROLE:-kanoon_app}
+
       KANOON_SIGNING_KEY: ${KANOON_SIGNING_KEY}
+
       KANOON_OTP_PROVIDER: ${KANOON_OTP_PROVIDER:-mock}
       KANOON_PAYMENT_PROVIDER: ${KANOON_PAYMENT_PROVIDER:-mock}
+
       KANOON_SITE_BUILD_HMAC_SECRET: ${KANOON_SITE_BUILD_HMAC_SECRET}
-      # Container loopback is not host loopback; Docker performs the host isolation below.
+
+      # Container loopback is not host loopback.
+      # Bind inside the container and restrict exposure at Docker level.
       KANOON_CONTROL_PLANE_HOST: 0.0.0.0
-      KANOON_CONTROL_PLANE_PORT: 8001
+      KANOON_CONTROL_PLANE_PORT: "8001"
+
     depends_on:
       postgres:
         condition: service_healthy
+
     ports:
       - "127.0.0.1:8001:8001"
+
     labels:
       traefik.enable: "false"
+
     restart: unless-stopped
+
     healthcheck:
       test:
-        [
-          "CMD",
-          "uv",
-          "run",
-          "--no-sync",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/live', timeout=2)",
-        ]
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen(
+          'http://127.0.0.1:8001/health/live',
+          timeout=2
+          )
       interval: 10s
       timeout: 3s
       retries: 5
+      start_period: 5s
+
 
 volumes:
   kanoon-postgres:
-  kanoon-minio:

@@ -1,0 +1,18 @@
+{
+  "identities": [
+    {
+      "name": "kanoon-backend",
+      "credentials": [
+        {
+          "accessKey": "REPLACE_WITH_KANOON_ACCESS_KEY",
+          "secretKey": "REPLACE_WITH_KANOON_SECRET_KEY"
+        }
+      ],
+      "actions": [
+        "Read:kanoon",
+        "List:kanoon",
+        "Write:kanoon"
+      ]
+    }
+  ]
+}

@@ -25,11 +25,12 @@ HTTP process/network composition is documented in [deployment](docs/deployment.m
 
 ## Local setup
 
-Requirements: Docker/Podman Compose and `uv 0.11.33` (the lock also works with compatible uv 0.11.x).
+Requirements: Docker/Podman Compose, access to the configured central SeaweedFS S3 gateway, and
+`uv 0.11.33` (the lock also works with compatible uv 0.11.x).
 
 ```bash
 cp .env.example .env
-docker compose up -d postgres minio
+docker compose up -d postgres
 uv sync --frozen --all-groups
 uv run alembic upgrade head
 KANOON_BOOTSTRAP_PASSWORD='use-a-random-development-value' uv run kanoon bootstrap \
@@ -55,6 +56,13 @@ Settings use the `KANOON_` prefix and are typed in `app/core/config.py`. Product
 debug mode, short signing keys, mock OTP, and mock payment settings. Supply concrete `OTPProvider`
 and `PaymentGateway` adapters to `create_app`; vendor credentials remain environment/secret-manager
 inputs. `.env.example` contains local non-secret defaults.
+
+Object storage has separate transport and browser endpoints. `KANOON_S3_ENDPOINT_URL` is the
+backend-reachable S3 API address; `KANOON_S3_PUBLIC_ENDPOINT_URL` is the HTTPS address used when
+signing URLs returned to browsers. Production requires the public value. The public reverse proxy
+must preserve the request Host, path, and query used by the S3 signature, and the bucket must allow
+the intended tenant/admin origins in its own CORS policy. The repository does not run a local MinIO
+or SeaweedFS container; see the [central SeaweedFS configuration](deploy/seaweedfs/README.md).
 
 Prefer same-origin `https://school.example/api/...`. If the API is cross-origin, CORS accepts only
 configured platform origins or active domains owned by the already-resolved tenant.

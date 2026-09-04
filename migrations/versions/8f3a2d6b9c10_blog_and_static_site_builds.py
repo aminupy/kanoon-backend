@@ -46,23 +46,49 @@ def upgrade() -> None:
     op.add_column("posts", sa.Column("seo_description", sa.String(length=500), nullable=True))
     op.add_column("posts", sa.Column("created_by", sa.Uuid(), nullable=True))
     op.add_column("posts", sa.Column("updated_by", sa.Uuid(), nullable=True))
+
+    # posts already has FORCE RLS from the initial migration.
+    # Temporarily allow the table owner to perform the global data backfill.
+    op.execute('ALTER TABLE "posts" NO FORCE ROW LEVEL SECURITY')
+
     op.execute(
         """
         UPDATE posts
         SET content_document = jsonb_build_object(
             'type', 'doc',
-            'content', CASE WHEN body = '' THEN '[]'::jsonb ELSE jsonb_build_array(
-                jsonb_build_object(
-                    'type', 'paragraph',
-                    'content', jsonb_build_array(jsonb_build_object('type', 'text', 'text', body))
+            'content', CASE
+                WHEN body = '' THEN '[]'::jsonb
+                ELSE jsonb_build_array(
+                    jsonb_build_object(
+                        'type', 'paragraph',
+                        'content',
+                        jsonb_build_array(
+                            jsonb_build_object(
+                                'type', 'text',
+                                'text', body
+                            )
+                        )
+                    )
                 )
-            ) END
+            END
         ),
-        rendered_html = CASE WHEN body = '' THEN '' ELSE
-            '<p>' || replace(replace(replace(body, '&', '&amp;'), '<', '&lt;'), '>', '&gt;') || '</p>'
+        rendered_html = CASE
+            WHEN body = '' THEN ''
+            ELSE '<p>'
+                || replace(
+                    replace(
+                        replace(body, '&', '&amp;'),
+                        '<', '&lt;'
+                    ),
+                    '>', '&gt;'
+                )
+                || '</p>'
         END
         """
     )
+
+    op.execute('ALTER TABLE "posts" FORCE ROW LEVEL SECURITY')
+
     op.create_foreign_key(
         op.f("fk_posts_created_by_users"), "posts", "users", ["created_by"], ["id"]
     )

@@ -72,3 +72,24 @@ Swagger/OpenAPI remain at `/docs` and `/openapi.json` on the isolated listener.
 Both applications expose non-sensitive `/health/live` and `/health/ready`. Data readiness checks
 PostgreSQL and object storage; control readiness checks PostgreSQL only. Public gateway health does
 not depend on the control process.
+
+## Object-storage endpoints
+
+Configure the backend's private transport separately from the browser-visible S3 gateway:
+
+```dotenv
+KANOON_S3_ENDPOINT_URL=http://storage.service.internal:8333
+KANOON_S3_PUBLIC_ENDPOINT_URL=https://storage.example.com
+KANOON_S3_BUCKET=kanoon
+```
+
+The first URL is used for health checks, object inspection, deletion, and bucket administration. It
+may be private HTTP on a trusted service network. The second URL is used by boto3 when calculating
+presigned uploads and downloads, must be reachable from users' browsers, and must use HTTPS in
+production. Both endpoints must reach the same logical S3 service and bucket.
+
+The public storage proxy must preserve the original Host, path, query string, request body, and
+method; changing signature-bound request components produces S3 signature errors. Configure the S3
+bucket/gateway CORS policy with the exact tenant and administration frontend origins that upload or
+fetch objects. Do not use a wildcard origin with credentials. Editing `.env` does not alter an
+already-created container; recreate the data-plane container after changing these values.

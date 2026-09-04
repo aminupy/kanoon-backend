@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -65,11 +66,14 @@ class Settings(BaseSettings):
     site_build_lease_seconds: int = Field(default=300, ge=30, le=3600)
     site_build_poll_seconds: float = Field(default=5.0, ge=0.1, le=300)
 
-    s3_endpoint_url: str = "http://localhost:9000"
+    # Internal service endpoint for trusted backend operations.
+    s3_endpoint_url: str = "http://localhost:8333"
+    # Browser-reachable endpoint used to construct and sign presigned URLs.
+    s3_public_endpoint_url: str | None = None
     s3_region: str = "us-east-1"
-    s3_bucket: str = "kanoon-media"
-    s3_access_key: SecretStr = SecretStr("minioadmin")
-    s3_secret_key: SecretStr = SecretStr("minioadmin")
+    s3_bucket: str = "kanoon"
+    s3_access_key: SecretStr = SecretStr("development-access-key")
+    s3_secret_key: SecretStr = SecretStr("development-secret-key")
     s3_presign_ttl_seconds: int = Field(default=900, ge=60, le=86400)
     upload_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)
     upload_allowed_mime_types: list[str] = Field(
@@ -80,6 +84,20 @@ class Settings(BaseSettings):
             "application/pdf",
         ]
     )
+
+    @field_validator("s3_endpoint_url", "s3_public_endpoint_url")
+    @classmethod
+    def validate_s3_endpoint_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+            raise ValueError("S3 endpoint URLs must be absolute HTTP(S) URLs")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("S3 endpoint URLs must not contain credentials")
+        if parsed.query or parsed.fragment:
+            raise ValueError("S3 endpoint URLs must not contain a query or fragment")
+        return value.rstrip("/")
 
     @model_validator(mode="after")
     def reject_unsafe_production_settings(self) -> Settings:

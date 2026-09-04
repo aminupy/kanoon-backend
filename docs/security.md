@@ -33,7 +33,10 @@ responses never include stack traces.
 
 Uploads have backend-generated keys, exact MIME/extension allowlists, presigned size conditions, and
 post-upload metadata verification. S3 credentials and signing keys come from the environment/secret
-manager. Database BLOBs are prohibited.
+manager. Database BLOBs are prohibited. Internal S3 transport and public presigning endpoints are
+separate: only the public HTTPS endpoint appears in browser-facing signed URLs. The object-storage
+gateway must preserve the signed Host, path, and query, and its bucket CORS rules must list only
+approved tenant/admin origins rather than `*`.
 
 Blog rich text is structured JSON, not administrator HTML. A bounded node/mark allowlist rejects
 scripts, arbitrary embeds/iframes/fields, unsafe URL schemes, and malformed/deep documents. The

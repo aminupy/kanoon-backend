@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, Protocol
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import anyio
 import boto3
@@ -54,6 +54,11 @@ class ObjectStorage(Protocol):
 
 class S3ObjectStorage:
     def __init__(self, settings: Settings) -> None:
+        if settings.environment == "production":
+            if settings.s3_public_endpoint_url is None:
+                raise ValueError("a public S3 endpoint URL is required in production")
+            if urlsplit(settings.s3_public_endpoint_url).scheme != "https":
+                raise ValueError("the production public S3 endpoint URL must use HTTPS")
         self.settings = settings
         self.client: S3Client = boto3.client(
             "s3",
@@ -62,6 +67,18 @@ class S3ObjectStorage:
             aws_access_key_id=settings.s3_access_key.get_secret_value(),
             aws_secret_access_key=settings.s3_secret_key.get_secret_value(),
         )
+        public_endpoint = settings.s3_public_endpoint_url or settings.s3_endpoint_url
+        self.presign_client: S3Client
+        if public_endpoint == settings.s3_endpoint_url:
+            self.presign_client = self.client
+        else:
+            self.presign_client = boto3.client(
+                "s3",
+                endpoint_url=public_endpoint,
+                region_name=settings.s3_region,
+                aws_access_key_id=settings.s3_access_key.get_secret_value(),
+                aws_secret_access_key=settings.s3_secret_key.get_secret_value(),
+            )
 
     async def ensure_bucket(self) -> None:
         try:
@@ -83,7 +100,7 @@ class S3ObjectStorage:
         self, *, object_key: str, mime_type: str, max_bytes: int
     ) -> PresignedUpload:
         operation = partial(
-            self.client.generate_presigned_post,
+            self.presign_client.generate_presigned_post,
             Bucket=self.settings.s3_bucket,
             Key=object_key,
             Fields={"Content-Type": mime_type},
@@ -119,7 +136,7 @@ class S3ObjectStorage:
     ) -> str:
         return await anyio.to_thread.run_sync(
             partial(
-                self.client.generate_presigned_url,
+                self.presign_client.generate_presigned_url,
                 "get_object",
                 Params={
                     "Bucket": self.settings.s3_bucket,

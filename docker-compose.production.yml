@@ -154,3 +154,5 @@ networks:
     internal: true
   # Backend and build worker use this network for S3, payment, OTP, and build webhooks.
   edge:
+    name: gateway
+    external: true

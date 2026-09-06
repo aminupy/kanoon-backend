@@ -50,7 +50,7 @@ done
 
 rollback_image="$(sed -n 's/^KANOON_IMAGE=//p' "$release_env")"
 rollback_revision="$(sed -n 's/^RELEASE_ID=//p' "$release_env")"
-[[ "$rollback_image" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]
+[[ "$KANOON_IMAGE" =~ ^(ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}|kanoon-backend:sha-[a-f0-9]{40})$ ]]
 [[ "$rollback_revision" =~ ^[a-f0-9]{40}$ ]]
 
 touch "$lock_file"

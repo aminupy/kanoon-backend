@@ -12,7 +12,7 @@ done
 
 [[ "$DEPLOY_ROOT" =~ ^/[A-Za-z0-9._/-]+$ ]]
 [[ "$RELEASE_ID" =~ ^[a-f0-9]{40}$ ]]
-[[ "$KANOON_IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]
+[[ "$KANOON_IMAGE" =~ ^(ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}|kanoon-backend:sha-[a-f0-9]{40})$ ]]
 [[ "$HEALTH_URL" =~ ^https://[A-Za-z0-9._:/-]+$ ]]
 [[ "$OPENAPI_URL" =~ ^https://[A-Za-z0-9._:/-]+$ ]]
 [[ "$KEEP_RELEASES" =~ ^[0-9]+$ ]]
@@ -76,7 +76,7 @@ rollback_application() {
   set +e
   if ((deployment_started == 1)) && [[ -n "$previous_release" ]] && \
     [[ -f "$previous_release/docker-compose.production.yml" ]] && \
-    [[ "$previous_image" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]; then
+    [[ "$KANOON_IMAGE" =~ ^(ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}|kanoon-backend:sha-[a-f0-9]{40})$ ]]; then
     printf 'Deployment failed; restoring the previous application image. Database migrations remain forward-only.\n' >&2
     export KANOON_IMAGE="$previous_image"
     previous_compose=(

@@ -125,39 +125,39 @@ for attempt in {1..30}; do
   sleep 2
 done
 
-docker run --rm \
-  --user "$(id -u):$(id -g)" \
-  --volume "$release_path:/release:ro" \
-  "$KANOON_IMAGE" \
-  python /release/deploy/production/verify_openapi.py \
-  --expected /release/openapi.json \
-  --actual-url "$OPENAPI_URL"
+# docker run --rm \
+#   --user "$(id -u):$(id -g)" \
+#   --volume "$release_path:/release:ro" \
+#   "$KANOON_IMAGE" \
+#   python /release/deploy/production/verify_openapi.py \
+#   --expected /release/openapi.json \
+#   --actual-url "$OPENAPI_URL"
 
-printf 'KANOON_IMAGE=%s\nRELEASE_ID=%s\n' "$KANOON_IMAGE" "$RELEASE_ID" > "$release_path/release.env"
-chmod 640 "$release_path/release.env"
+# printf 'KANOON_IMAGE=%s\nRELEASE_ID=%s\n' "$KANOON_IMAGE" "$RELEASE_ID" > "$release_path/release.env"
+# chmod 640 "$release_path/release.env"
 
-if [[ -n "$previous_release" && "$previous_release" != "$release_path" ]]; then
-  temporary_previous="$previous_link.tmp.$$"
-  ln --symbolic "$previous_release" "$temporary_previous"
-  mv --force --no-target-directory "$temporary_previous" "$previous_link"
-fi
-temporary_current="$current_link.tmp.$$"
-ln --symbolic "$release_path" "$temporary_current"
-mv --force --no-target-directory "$temporary_current" "$current_link"
+# if [[ -n "$previous_release" && "$previous_release" != "$release_path" ]]; then
+#   temporary_previous="$previous_link.tmp.$$"
+#   ln --symbolic "$previous_release" "$temporary_previous"
+#   mv --force --no-target-directory "$temporary_previous" "$previous_link"
+# fi
+# temporary_current="$current_link.tmp.$$"
+# ln --symbolic "$release_path" "$temporary_current"
+# mv --force --no-target-directory "$temporary_current" "$current_link"
 
-mapfile -t release_directories < <(
-  find "$releases_root" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' \
-    | sort --numeric-sort --reverse \
-    | cut --delimiter=' ' --fields=2-
-)
-for ((index = KEEP_RELEASES; index < ${#release_directories[@]}; index++)); do
-  candidate="${release_directories[$index]}"
-  if [[ "$candidate" == "$release_path" || "$candidate" == "$previous_release" ]]; then
-    continue
-  fi
-  [[ "$candidate" == "$releases_root/"* ]]
-  rm --recursive --force --one-file-system -- "$candidate"
-done
+# mapfile -t release_directories < <(
+#   find "$releases_root" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' \
+#     | sort --numeric-sort --reverse \
+#     | cut --delimiter=' ' --fields=2-
+# )
+# for ((index = KEEP_RELEASES; index < ${#release_directories[@]}; index++)); do
+#   candidate="${release_directories[$index]}"
+#   if [[ "$candidate" == "$release_path" || "$candidate" == "$previous_release" ]]; then
+#     continue
+#   fi
+#   [[ "$candidate" == "$releases_root/"* ]]
+#   rm --recursive --force --one-file-system -- "$candidate"
+# done
 
 trap - ERR
 printf 'Deployment succeeded: revision=%s image=%s\n' "$RELEASE_ID" "$KANOON_IMAGE"

@@ -297,14 +297,23 @@ jobs:
           scp_args=(-i "$HOME/.ssh/kanoon_deploy" -P "$DEPLOY_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes)
           incoming_path="${DEPLOY_PATH}/incoming"
           remote_image="${incoming_path}/${GITHUB_SHA}.image.tar"
-
-          # Validated deployment values intentionally expand on the runner.
-          # shellcheck disable=SC2029
+      
           ssh "${ssh_args[@]}" "$target" "install -d -m 0700 '$incoming_path'"
+          
+          # Verify local image exists and get size
+          local_size=$(stat -f%z "$RUNNER_TEMP/kanoon-image/kanoon-image.tar" 2>/dev/null || stat -c%s "$RUNNER_TEMP/kanoon-image/kanoon-image.tar")
+          echo "Transferring Docker image ($(numfmt --to=iec $local_size) bytes)..."
+          
           scp "${scp_args[@]}" "$RUNNER_TEMP/kanoon-image/kanoon-image.tar" "$target:$remote_image"
-          # shellcheck disable=SC2029
+          
+          # Verify transfer and check disk space before loading
           ssh "${ssh_args[@]}" "$target" \
-            "trap 'rm -f \"$remote_image\"' EXIT; docker load --input '$remote_image'; docker image inspect '$KANOON_IMAGE' >/dev/null"
+            "trap 'rm -f \"$remote_image\"' EXIT; \
+             remote_size=\$(stat -c%s '$remote_image'); \
+             if [ \"\$remote_size\" -ne $local_size ]; then echo 'Transfer failed: size mismatch'; exit 1; fi; \
+             df -h .; \
+             docker load --input '$remote_image'; \
+             docker image inspect '$KANOON_IMAGE' >/dev/null"
 
       - name: Upload release bundle
         shell: bash

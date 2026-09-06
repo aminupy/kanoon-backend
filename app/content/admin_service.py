@@ -107,6 +107,15 @@ class AdminContentService:
         actor_user_id: uuid.UUID,
         entity_type: str,
     ) -> ModelT:
+        if (
+            getattr(entity, "status", None) == "ARCHIVED"
+            or getattr(entity, "archived_at", None) is not None
+        ):
+            raise ApplicationError(
+                "ADMIN_RESOURCE_ARCHIVED",
+                "An archived resource cannot be updated.",
+                status_code=409,
+            )
         for key, value in schema_values(body).items():
             setattr(entity, key, value)
         if (
@@ -124,6 +133,10 @@ class AdminContentService:
             entity_type=entity_type,
             entity_id=entity.id,  # type: ignore[attr-defined]
         )
+        # ``updated_at`` is populated by the SQL expression in TimestampMixin. SQLAlchemy
+        # expires that attribute after UPDATE, so response serialization would otherwise try
+        # to issue synchronous lazy I/O from Pydantic and fail with MissingGreenlet.
+        await session.refresh(entity)
         return entity
 
     async def archive_or_delete(
@@ -139,6 +152,10 @@ class AdminContentService:
             setattr(entity, "status", "ARCHIVED")  # noqa: B010 - generic mapped resource
         elif hasattr(entity, "is_active"):
             setattr(entity, "is_active", False)  # noqa: B010 - generic mapped resource
+            if hasattr(entity, "archived_at"):
+                setattr(  # noqa: B010 - generic mapped resource
+                    entity, "archived_at", datetime.now(UTC)
+                )
         else:
             await session.delete(entity)
         await self.audit(

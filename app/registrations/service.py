@@ -10,6 +10,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.security import opaque_token, token_digest
+from app.content.models import SchoolDirectoryEntry
 from app.core.config import Settings
 from app.core.errors import ApplicationError
 from app.exams.models import ExamOffering, ExamPricingPlan, PricingPlan
@@ -131,6 +132,34 @@ class RegistrationService:
                 "REGISTRATION_NOT_EDITABLE", "Registration can no longer be edited."
             )
         changes = body.model_dump(exclude_unset=True)
+        invalid_references: list[str] = []
+        for field in ("current_school_id", "previous_school_id"):
+            school_id = changes.get(field)
+            if school_id is not None:
+                school = await session.get(SchoolDirectoryEntry, school_id)
+                if school is None or not school.is_active:
+                    invalid_references.append(field)
+        profile_image_id = changes.get("profile_image_id")
+        if profile_image_id is not None:
+            profile_image = await session.scalar(
+                select(MediaAsset).where(
+                    MediaAsset.id == profile_image_id,
+                    MediaAsset.tenant_id == registration.tenant_id,
+                )
+            )
+            if (
+                profile_image is None
+                or profile_image.status != "READY"
+                or profile_image.visibility != "PRIVATE"
+            ):
+                invalid_references.append("profile_image_id")
+        if invalid_references:
+            raise ApplicationError(
+                "REGISTRATION_REFERENCE_INVALID",
+                "A referenced registration resource is unavailable.",
+                status_code=422,
+                details={"fields": invalid_references},
+            )
         old_phone = registration.phone_number
         for field, value in changes.items():
             setattr(registration, field, value)
@@ -147,6 +176,9 @@ class RegistrationService:
                 .values(invalidated_at=datetime.now(UTC))
             )
         await session.flush()
+        # TimestampMixin.updated_at is expired by its SQL-side on-update expression. Load it
+        # while async I/O is still explicit so the router can serialize the object safely.
+        await session.refresh(registration)
         return registration
 
     async def rotate_token(self, registration: Registration) -> str:

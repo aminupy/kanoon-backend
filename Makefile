@@ -1,4 +1,4 @@
-.PHONY: format lint typecheck test test-integration migrate migration-check run run-control
+.PHONY: format lint typecheck test test-integration migrate migration-check openapi run run-control
 
 format:
 	uv run ruff format app tests migrations
@@ -22,6 +22,9 @@ migrate:
 
 migration-check:
 	uv run alembic check
+
+openapi:
+	uv run kanoon export-openapi --output openapi.json
 
 run:
 	uv run kanoon serve-data-plane --reload

@@ -1,39 +1,358 @@
-name: CI
+name: CI/CD
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.13"
+  UV_VERSION: "0.11.33"
+  POSTGRES_DB: kanoon_test
+  POSTGRES_USER: kanoon_owner
+  POSTGRES_PASSWORD: ci-only-postgres-password
+  MINIO_ROOT_USER: ci-only-minio-access-key
+  MINIO_ROOT_PASSWORD: ci-only-minio-secret-key
 
 jobs:
   quality:
+    name: Test, contract, and migration gates
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
-        image: postgres:17.6-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_DB: kanoon_test
           POSTGRES_USER: kanoon_owner
-          POSTGRES_PASSWORD: kanoon_owner
+          POSTGRES_PASSWORD: ci-only-postgres-password
+          POSTGRES_INITDB_ARGS: --data-checksums --auth-host=scram-sha-256
         ports:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U kanoon_owner -d kanoon_test"
-          --health-interval 2s --health-timeout 3s --health-retries 20
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
     env:
       KANOON_ENVIRONMENT: testing
-      KANOON_DATABASE_DSN: postgresql+psycopg://kanoon_owner:kanoon_owner@localhost:5432/kanoon_test
-      KANOON_TEST_DATABASE_DSN: postgresql+psycopg://kanoon_owner:kanoon_owner@localhost:5432/kanoon_test
+      KANOON_DATABASE_DSN: postgresql+psycopg://kanoon_owner:ci-only-postgres-password@127.0.0.1:5432/kanoon_test
+      KANOON_TEST_DATABASE_DSN: postgresql+psycopg://kanoon_owner:ci-only-postgres-password@127.0.0.1:5432/kanoon_test
       KANOON_SIGNING_KEY: ci-only-signing-key-with-at-least-32-characters
+      KANOON_TEST_S3_ENDPOINT_URL: http://127.0.0.1:59000
+      KANOON_S3_ACCESS_KEY: ci-only-minio-access-key
+      KANOON_S3_SECRET_KEY: ci-only-minio-secret-key
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
-          version: "0.11.33"
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
-      - run: uv sync --frozen --all-groups
-      - run: uv run ruff format --check app tests migrations
-      - run: uv run ruff check app tests migrations
-      - run: uv run mypy app tests
-      - run: uv run alembic upgrade head
-      - run: uv run alembic check
-      - run: uv run pytest -q
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install locked dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Provision the restricted database role
+        run: >-
+          docker exec "${{ job.services.postgres.id }}"
+          psql --set ON_ERROR_STOP=1
+          --username "$POSTGRES_USER"
+          --dbname "$POSTGRES_DB"
+          --command "CREATE ROLE kanoon_app NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
+
+      - name: Start isolated S3-compatible storage
+        run: |
+          docker run --detach --rm \
+            --name kanoon-ci-minio \
+            --publish 127.0.0.1:59000:9000 \
+            --env MINIO_ROOT_USER \
+            --env MINIO_ROOT_PASSWORD \
+            minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
+            server /data
+          for _attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:59000/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs kanoon-ci-minio
+          exit 1
+
+      - name: Check formatting
+        run: uv run ruff format --check app tests migrations deploy/production
+
+      - name: Lint
+        run: uv run ruff check app tests migrations deploy/production
+
+      - name: Type-check
+        run: uv run mypy app tests deploy/production/verify_openapi.py
+
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+
+      - name: Check migration graph
+        run: uv run alembic check
+
+      - name: Run complete test suite
+        run: uv run pytest -q
+
+      - name: Exercise latest downgrade and re-upgrade
+        run: |
+          uv run alembic downgrade -1
+          uv run alembic upgrade head
+
+      - name: Verify generated OpenAPI is committed
+        run: |
+          uv run kanoon export-openapi --output "$RUNNER_TEMP/openapi.generated.json"
+          uv run python deploy/production/verify_openapi.py \
+            --expected openapi.json \
+            --actual-file "$RUNNER_TEMP/openapi.generated.json"
+
+      - name: Stop isolated storage
+        if: always()
+        run: docker rm --force kanoon-ci-minio 2>/dev/null || true
+
+  container:
+    name: Container build gate
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Build the production image without publishing
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          load: true
+          push: false
+          tags: kanoon-backend:ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+  image:
+    name: Build and publish immutable image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - quality
+      - container
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_ref: ${{ steps.published.outputs.image_ref }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set lowercase image name
+        id: image-name
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate OCI metadata
+        id: metadata
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ${{ steps.image-name.outputs.name }}
+          tags: |
+            type=sha,format=long,prefix=sha-
+            type=raw,value=main
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Build, attest, and push
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Export immutable image reference
+        id: published
+        env:
+          IMAGE_NAME: ${{ steps.image-name.outputs.name }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: echo "image_ref=${IMAGE_NAME}@${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy production
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    concurrency:
+      group: kanoon-production-deployment
+      cancel-in-progress: false
+
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_URL }}
+
+    permissions:
+      contents: read
+
+    env:
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      DEPLOY_HEALTH_URL: ${{ vars.DEPLOY_HEALTH_URL }}
+      DEPLOY_OPENAPI_URL: ${{ vars.DEPLOY_OPENAPI_URL }}
+      DEPLOY_KEEP_RELEASES: ${{ vars.DEPLOY_KEEP_RELEASES }}
+      GHCR_DEPLOY_USERNAME: ${{ vars.GHCR_DEPLOY_USERNAME }}
+      KANOON_IMAGE: ${{ needs.image.outputs.image_ref }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Connect to ABHP private network
+        uses: Alemiz112/netbird-connect@fbea46300ca7ee907ff7d8e39ede3f556a6ecf10 # v1.0.2
+        with:
+          setup-key: ${{ secrets.NETBIRD_SETUP_KEY }}
+          management-url: https://netbird.abhp.ir
+          hostname: gha-kanoon-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Verify private deployment connectivity
+        shell: bash
+        run: |
+          echo "Resolving deployment host..."
+          getent ahostsv4 "$DEPLOY_HOST"
+
+          echo "Testing SSH over NetBird..."
+          nc -vz -w5 "$DEPLOY_HOST" "$DEPLOY_PORT"
+
+      - name: Validate deployment inputs
+        shell: bash
+        run: |
+          : "${DEPLOY_HOST:?Set the production DEPLOY_HOST variable}"
+          : "${DEPLOY_PORT:?Set the production DEPLOY_PORT variable}"
+          : "${DEPLOY_USER:?Set the production DEPLOY_USER variable}"
+          : "${DEPLOY_PATH:?Set the production DEPLOY_PATH variable}"
+          : "${DEPLOY_HEALTH_URL:?Set the production DEPLOY_HEALTH_URL variable}"
+          : "${DEPLOY_OPENAPI_URL:?Set the production DEPLOY_OPENAPI_URL variable}"
+          : "${DEPLOY_KEEP_RELEASES:?Set the production DEPLOY_KEEP_RELEASES variable}"
+          : "${GHCR_DEPLOY_USERNAME:?Set the production GHCR_DEPLOY_USERNAME variable}"
+
+          [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9.-]+$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]]
+          [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]]
+          [[ "$DEPLOY_HEALTH_URL" =~ ^https://[A-Za-z0-9._:/-]+$ ]]
+          [[ "$DEPLOY_OPENAPI_URL" =~ ^https://[A-Za-z0-9._:/-]+$ ]]
+          [[ "$DEPLOY_KEEP_RELEASES" =~ ^[0-9]+$ ]]
+          [[ "$GHCR_DEPLOY_USERNAME" =~ ^[A-Za-z0-9_-]+$ ]]
+          [[ "$KANOON_IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]
+
+          (( DEPLOY_PORT >= 1 && DEPLOY_PORT <= 65535 ))
+          (( DEPLOY_KEEP_RELEASES >= 2 && DEPLOY_KEEP_RELEASES <= 50 ))
+      - name: Configure pinned SSH host and key
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          : "${SSH_PRIVATE_KEY:?Set DEPLOY_SSH_PRIVATE_KEY in the production environment}"
+          : "${SSH_KNOWN_HOSTS:?Set DEPLOY_SSH_KNOWN_HOSTS in the production environment}"
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/kanoon_deploy"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/kanoon_deploy" "$HOME/.ssh/known_hosts"
+
+      - name: Authenticate the production host to GHCR
+        shell: bash
+        env:
+          GHCR_DEPLOY_TOKEN: ${{ secrets.GHCR_DEPLOY_TOKEN }}
+        run: |
+          : "${GHCR_DEPLOY_TOKEN:?Set GHCR_DEPLOY_TOKEN in the production environment}"
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh_args=(-i "$HOME/.ssh/kanoon_deploy" -p "$DEPLOY_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes)
+          # The validated username intentionally expands on the runner.
+          # shellcheck disable=SC2029
+          printf '%s' "$GHCR_DEPLOY_TOKEN" | ssh "${ssh_args[@]}" "$target" \
+            "docker login ghcr.io --username '$GHCR_DEPLOY_USERNAME' --password-stdin"
+
+      - name: Upload release bundle
+        shell: bash
+        run: |
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh_args=(-i "$HOME/.ssh/kanoon_deploy" -p "$DEPLOY_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes)
+          scp_args=(-i "$HOME/.ssh/kanoon_deploy" -P "$DEPLOY_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes)
+          release_path="${DEPLOY_PATH}/releases/${GITHUB_SHA}"
+          incoming_path="${DEPLOY_PATH}/incoming"
+          remote_bundle="${incoming_path}/${GITHUB_SHA}.tgz"
+          tar --create --gzip --file "$RUNNER_TEMP/kanoon-release.tgz" \
+            docker-compose.production.yml \
+            openapi.json \
+            deploy/postgres/init/00-kanoon-roles.sh \
+            deploy/production/deploy.sh \
+            deploy/production/rollback.sh \
+            deploy/production/verify_openapi.py
+          # Validated paths intentionally expand on the runner.
+          # shellcheck disable=SC2029
+          ssh "${ssh_args[@]}" "$target" "install -d -m 0700 '$incoming_path'"
+          # shellcheck disable=SC2029
+          ssh "${ssh_args[@]}" "$target" "install -d -m 0750 '$release_path'"
+          scp "${scp_args[@]}" "$RUNNER_TEMP/kanoon-release.tgz" "$target:$remote_bundle"
+          # shellcheck disable=SC2029
+          ssh "${ssh_args[@]}" "$target" "tar -xzf '$remote_bundle' -C '$release_path'"
+          # shellcheck disable=SC2029
+          ssh "${ssh_args[@]}" "$target" "rm -f '$remote_bundle'"
+
+      - name: Run migration-gated deployment
+        shell: bash
+        run: |
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh_args=(-i "$HOME/.ssh/kanoon_deploy" -p "$DEPLOY_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes)
+          release_path="${DEPLOY_PATH}/releases/${GITHUB_SHA}"
+          # All interpolated deployment values passed the validation step.
+          # shellcheck disable=SC2029
+          ssh "${ssh_args[@]}" "$target" \
+            "DEPLOY_ROOT='$DEPLOY_PATH' RELEASE_ID='$GITHUB_SHA' KANOON_IMAGE='$KANOON_IMAGE' HEALTH_URL='$DEPLOY_HEALTH_URL' OPENAPI_URL='$DEPLOY_OPENAPI_URL' KEEP_RELEASES='$DEPLOY_KEEP_RELEASES' bash '$release_path/deploy/production/deploy.sh'"
+
+      - name: Disconnect from ABHP private network
+        if: always()
+        shell: bash
+        run: sudo netbird down || true

@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,7 +49,7 @@ from app.content.schemas import BannerWrite, PostWrite
 from app.core.errors import ApplicationError
 from app.core.models import Base
 from app.core.pagination import Page, PageParams
-from app.exams.models import ExamOffering, PricingPlan
+from app.exams.models import ExamOffering, ExamPricingPlan, PricingPlan
 from app.tenancy.context import TenantContext, tenant_context_from_request
 from app.tenancy.dependencies import require_feature, tenant_session
 from app.tenancy.features import ensure_feature_enabled
@@ -204,14 +205,21 @@ async def update_post(
             "Use the dedicated blog draft and publication endpoints.",
             status_code=422,
         )
-    await service.update(
-        session,
-        entity,
-        body=body,
-        tenant_id=tenant.tenant_id,
-        actor_user_id=principal.user_id,
-        entity_type="post",
-    )
+    try:
+        await service.update(
+            session,
+            entity,
+            body=body,
+            tenant_id=tenant.tenant_id,
+            actor_user_id=principal.user_id,
+            entity_type="post",
+        )
+    except IntegrityError as exc:
+        raise ApplicationError(
+            "ADMIN_RESOURCE_CONFLICT",
+            "Resource conflicts with an existing record or relationship.",
+            status_code=409,
+        ) from exc
     return PostAdmin.model_validate(entity, from_attributes=True)
 
 
@@ -360,8 +368,19 @@ async def list_exams(
     session: AsyncSession = Depends(tenant_session),
 ) -> Page[Any]:
     result = await _list(ExamOffering, ExamOfferingAdmin, page, session)
+    plan_ids_by_exam: dict[uuid.UUID, list[uuid.UUID]] = {item.id: [] for item in result.items}
+    if plan_ids_by_exam:
+        associations = (
+            await session.execute(
+                select(ExamPricingPlan.exam_offering_id, ExamPricingPlan.pricing_plan_id).where(
+                    ExamPricingPlan.exam_offering_id.in_(plan_ids_by_exam)
+                )
+            )
+        ).all()
+        for exam_id, plan_id in associations:
+            plan_ids_by_exam[exam_id].append(plan_id)
     for item in result.items:
-        item.pricing_plan_ids = []
+        item.pricing_plan_ids = plan_ids_by_exam[item.id]
     return result
 
 
@@ -373,15 +392,22 @@ async def create_exam(
     session: AsyncSession = Depends(tenant_session),
 ) -> ExamOfferingAdmin:
     service = AdminContentService()
-    entity = await service.create(
-        session,
-        ExamOffering,
-        tenant_id=tenant.tenant_id,
-        body=body,
-        actor_user_id=principal.user_id,
-        entity_type="exam_offering",
-    )
-    await service.set_exam_plans(session, entity, body.pricing_plan_ids)
+    try:
+        entity = await service.create(
+            session,
+            ExamOffering,
+            tenant_id=tenant.tenant_id,
+            body=body,
+            actor_user_id=principal.user_id,
+            entity_type="exam_offering",
+        )
+        await service.set_exam_plans(session, entity, body.pricing_plan_ids)
+    except IntegrityError as exc:
+        raise ApplicationError(
+            "ADMIN_RESOURCE_CONFLICT",
+            "Resource conflicts with an existing record or relationship.",
+            status_code=409,
+        ) from exc
     response = ExamOfferingAdmin.model_validate(entity, from_attributes=True)
     response.pricing_plan_ids = body.pricing_plan_ids
     return response
@@ -468,13 +494,20 @@ async def create_gallery_item(
 ) -> GalleryItemAdmin:
     service = AdminContentService()
     await service.get(session, GalleryAlbum, album_id)
-    item = await service.add_gallery_item(
-        session,
-        tenant_id=tenant.tenant_id,
-        album_id=album_id,
-        body=body,
-        actor_user_id=principal.user_id,
-    )
+    try:
+        item = await service.add_gallery_item(
+            session,
+            tenant_id=tenant.tenant_id,
+            album_id=album_id,
+            body=body,
+            actor_user_id=principal.user_id,
+        )
+    except IntegrityError as exc:
+        raise ApplicationError(
+            "ADMIN_RESOURCE_CONFLICT",
+            "Resource conflicts with an existing record or relationship.",
+            status_code=409,
+        ) from exc
     return GalleryItemAdmin.model_validate(item, from_attributes=True)
 
 
@@ -640,15 +673,22 @@ async def update_exam(
 ) -> ExamOfferingAdmin:
     service = AdminContentService()
     entity = await service.get(session, ExamOffering, entity_id, lock=True)
-    await service.update(
-        session,
-        entity,
-        body=body,
-        tenant_id=tenant.tenant_id,
-        actor_user_id=principal.user_id,
-        entity_type="exam_offering",
-    )
-    await service.set_exam_plans(session, entity, body.pricing_plan_ids)
+    try:
+        await service.update(
+            session,
+            entity,
+            body=body,
+            tenant_id=tenant.tenant_id,
+            actor_user_id=principal.user_id,
+            entity_type="exam_offering",
+        )
+        await service.set_exam_plans(session, entity, body.pricing_plan_ids)
+    except IntegrityError as exc:
+        raise ApplicationError(
+            "ADMIN_RESOURCE_CONFLICT",
+            "Resource conflicts with an existing record or relationship.",
+            status_code=409,
+        ) from exc
     response = ExamOfferingAdmin.model_validate(entity, from_attributes=True)
     response.pricing_plan_ids = body.pricing_plan_ids
     return response

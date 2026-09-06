@@ -106,3 +106,31 @@ async def test_spoofed_forwarded_host_is_ignored(
     )
     assert response.status_code == 200
     await app.state.database.dispose()
+
+
+async def test_forwarded_host_is_used_only_from_an_explicitly_trusted_hop(
+    settings: Settings, domains: dict[str, str]
+) -> None:
+    untrusted_settings = settings.model_copy(
+        update={"trust_forwarded_host": True, "trusted_proxy_cidrs": ["192.0.2.0/24"]}
+    )
+    untrusted_app = create_app(untrusted_settings)
+    untrusted = await get(
+        untrusted_app,
+        domains["active"],
+        **{"X-Forwarded-Host": "unknown.example.test"},
+    )
+    assert untrusted.status_code == 200
+    await untrusted_app.state.database.dispose()
+
+    trusted_settings = settings.model_copy(
+        update={"trust_forwarded_host": True, "trusted_proxy_cidrs": ["127.0.0.1/32"]}
+    )
+    trusted_app = create_app(trusted_settings)
+    trusted = await get(
+        trusted_app,
+        "unknown.example.test",
+        **{"X-Forwarded-Host": domains["active"]},
+    )
+    assert trusted.status_code == 200
+    await trusted_app.state.database.dispose()

@@ -1,5 +1,8 @@
 # HTTP surface deployment
 
+The automated GitHub Actions release procedure, one-time host preparation, and exact GitHub
+variables/secrets are documented in [`docs/github-cicd.md`](github-cicd.md).
+
 ## Processes and network exposure
 
 The modular monolith has two ASGI applications built from the same image, code, settings, models,
@@ -27,6 +30,11 @@ The Internet reverse proxy routes only to `backend:8000`. This repository contai
 Traefik routing configuration; the production gateway configuration must not define a router,
 hostname, TLS certificate, or public DNS record for the control plane.
 
+The repository data-plane Caddy template is `deploy/Caddyfile.example`. Its canonical virtual host
+preserves `Host`, removes client-supplied `X-Forwarded-Host`, and has an explicit TLS catch-all that
+returns non-cacheable HTTP 421. Validate the rendered production Caddy configuration before reload;
+keep the previous configuration available for immediate rollback.
+
 Start both same-image processes with Compose:
 
 ```bash
@@ -35,6 +43,57 @@ docker compose up -d backend backend-control-plane
 
 The existing production requirements for concrete OTP/payment adapters and external secrets still
 apply to the data-plane composition entrypoint.
+
+## Production Compose stack
+
+`docker-compose.production.yml` is the standalone production topology. It uses the
+`postgres:18-alpine` image pinned by digest, a one-shot Alembic migration job, the data plane, the
+loopback-only control plane, and the site-build worker. PostgreSQL has no published host port. The
+data plane is also bound to host loopback for a host-managed reverse proxy. Update the PostgreSQL
+digest only as a reviewed infrastructure change with a backup and restore test; application pushes
+must not silently upgrade the database image.
+
+PostgreSQL 18 uses `/var/lib/postgresql/18/docker` as `PGDATA` and declares its volume at
+`/var/lib/postgresql`; the production Compose file therefore mounts its named volume at the parent
+path. Never attach an existing PostgreSQL 17 data volume directly to the PostgreSQL 18 service.
+Use a tested `pg_upgrade` procedure or logical dump/restore, with a verified backup and rollback
+copy.
+
+Create the two protected environment files on the production host:
+
+```bash
+cp deploy/production/compose.env.example .env.production
+cp deploy/production/app.env.example .env.production.app
+chmod 600 .env.production .env.production.app
+```
+
+`.env.production` is used only for Compose interpolation and contains the database initialization
+and migration-owner inputs. `.env.production.app` is passed to application containers and must
+contain only the restricted runtime DSN and application settings. URL-encode reserved password
+characters inside both DSNs. Use different, randomly generated passwords of at least 24 characters
+for the owner and runtime roles. Never place the owner DSN in the application environment file.
+
+Set `KANOON_IMAGE` to an immutable application image digest. Replace every placeholder and verify
+that the image wires concrete production OTP and payment adapters; the repository intentionally
+refuses to start the data plane with mocks in production.
+
+Validate and start the stack:
+
+```bash
+docker compose --env-file .env.production -f docker-compose.production.yml config --quiet
+docker compose --env-file .env.production -f docker-compose.production.yml pull
+docker compose --env-file .env.production -f docker-compose.production.yml up -d
+docker compose --env-file .env.production -f docker-compose.production.yml ps
+```
+
+On the first initialization, `deploy/postgres/init/00-kanoon-roles.sh` creates the non-login,
+non-owner `kanoon_app` RLS role and a restricted runtime login that may assume it. The script runs
+only for an empty data directory. For an existing database, a DBA must provision and audit those
+roles before migrations. The migration job alone receives `KANOON_MIGRATION_DATABASE_DSN`; all
+long-running application processes use `KANOON_DATABASE_DSN` from the application environment.
+
+Take database backups outside this Compose stack and test restores regularly. A named volume is
+persistence, not a backup.
 
 ## Operator access
 

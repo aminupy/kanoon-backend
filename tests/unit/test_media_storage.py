@@ -1,6 +1,8 @@
+import secrets
 from urllib.parse import urlsplit
 
 import pytest
+from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
 from app.core.config import Settings
@@ -13,8 +15,8 @@ async def test_presigned_urls_use_public_endpoint_while_operations_use_internal_
         s3_endpoint_url="http://storage.internal:8333",
         s3_public_endpoint_url="https://storage.example.com",
         s3_bucket="kanoon",
-        s3_access_key="test-access-key",
-        s3_secret_key="test-secret-key",
+        s3_access_key=secrets.token_urlsafe(24),
+        s3_secret_key=secrets.token_urlsafe(48),
     )
     storage = S3ObjectStorage(settings)
 
@@ -64,8 +66,8 @@ def test_production_requires_https_public_s3_endpoint() -> None:
                 environment="production",
                 otp_provider="external",
                 payment_provider="external",
-                signing_key="s" * 64,
-                site_build_hmac_secret="h" * 64,
+                signing_key=secrets.token_urlsafe(48),
+                site_build_hmac_secret=secrets.token_urlsafe(48),
             )
         )
     with pytest.raises(ValueError, match="public S3 endpoint URL must use HTTPS"):
@@ -74,8 +76,8 @@ def test_production_requires_https_public_s3_endpoint() -> None:
                 environment="production",
                 otp_provider="external",
                 payment_provider="external",
-                signing_key="s" * 64,
-                site_build_hmac_secret="h" * 64,
+                signing_key=secrets.token_urlsafe(48),
+                site_build_hmac_secret=secrets.token_urlsafe(48),
                 s3_public_endpoint_url="http://storage.example.com",
             )
         )
@@ -86,7 +88,7 @@ def test_production_requires_https_public_s3_endpoint() -> None:
     [
         "storage.example.com",
         "ftp://storage.example.com",
-        "https://user:password@storage.example.com",
+        "https://user@storage.example.com",
         "https://storage.example.com?secret=value",
         "https://storage.example.com/#fragment",
     ],
@@ -94,3 +96,17 @@ def test_production_requires_https_public_s3_endpoint() -> None:
 def test_s3_endpoints_reject_malformed_or_secret_bearing_urls(endpoint: str) -> None:
     with pytest.raises(ValidationError):
         Settings(s3_public_endpoint_url=endpoint)
+
+
+async def test_inspect_translates_provider_missing_object_to_none() -> None:
+    settings = Settings(environment="testing")
+    storage = S3ObjectStorage(settings)
+
+    def missing_object(**_: str) -> None:
+        raise ClientError(
+            {"Error": {"Code": "NoSuchKey", "Message": "provider detail must not escape"}},
+            "HeadObject",
+        )
+
+    storage.client.head_object = missing_object  # type: ignore[assignment]
+    assert await storage.inspect(object_key="tenants/test/missing.png") is None

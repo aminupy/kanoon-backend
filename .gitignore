@@ -9,6 +9,8 @@ wheels/
 # Virtual environments
 .venv
 .env
+.env.production
+.env.production.app
 .coverage
 .pytest_cache/
 .mypy_cache/

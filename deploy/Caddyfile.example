@@ -1,0 +1,16 @@
+# Data-plane reverse proxy. Keep KANOON_TRUST_FORWARDED_HOST=false when using this file: the
+# original Host is preserved and tenant selection does not need X-Forwarded-Host.
+kanoon.esaminu.ir {
+	reverse_proxy backend:8000 {
+		header_up Host {host}
+		# Never pass a client-supplied tenant selector to the application.
+		header_up -X-Forwarded-Host
+	}
+}
+
+# Explicit TLS catch-all. A connection may use the canonical SNI while sending a different HTTP
+# Host, so the unmatched virtual host must fail closed instead of returning Caddy's empty 200.
+:443 {
+	header Cache-Control "no-store"
+	respond 421
+}

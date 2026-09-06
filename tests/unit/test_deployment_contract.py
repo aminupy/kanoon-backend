@@ -24,3 +24,12 @@ def test_compose_separates_internal_and_browser_s3_endpoints() -> None:
     assert ("${KANOON_S3_PUBLIC_ENDPOINT_URL:?set the public SeaweedFS S3 URL}") in backend
     assert "\n  minio:" not in compose
     assert "kanoon-minio" not in compose
+
+
+def test_data_plane_caddy_rejects_unknown_hosts_and_strips_forwarded_host() -> None:
+    caddyfile = (REPOSITORY_ROOT / "deploy" / "Caddyfile.example").read_text(encoding="utf-8")
+
+    assert "kanoon.esaminu.ir" in caddyfile
+    assert "header_up -X-Forwarded-Host" in caddyfile
+    assert 'Cache-Control "no-store"' in caddyfile
+    assert "respond 421" in caddyfile

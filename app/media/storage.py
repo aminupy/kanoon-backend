@@ -39,7 +39,7 @@ class ObjectStorage(Protocol):
         self, *, object_key: str, mime_type: str, max_bytes: int
     ) -> PresignedUpload: ...
 
-    async def inspect(self, *, object_key: str) -> StoredObject: ...
+    async def inspect(self, *, object_key: str) -> StoredObject | None: ...
 
     async def presign_download(
         self,
@@ -113,14 +113,23 @@ class S3ObjectStorage:
         result = await anyio.to_thread.run_sync(operation)
         return PresignedUpload(url=result["url"], fields=result["fields"])
 
-    async def inspect(self, *, object_key: str) -> StoredObject:
-        result = await anyio.to_thread.run_sync(
-            partial(
-                self.client.head_object,
-                Bucket=self.settings.s3_bucket,
-                Key=object_key,
+    async def inspect(self, *, object_key: str) -> StoredObject | None:
+        try:
+            result = await anyio.to_thread.run_sync(
+                partial(
+                    self.client.head_object,
+                    Bucket=self.settings.s3_bucket,
+                    Key=object_key,
+                )
             )
-        )
+        except ClientError as exc:
+            error = exc.response.get("Error", {})
+            error_code = str(error.get("Code", ""))
+            response_metadata = exc.response.get("ResponseMetadata", {})
+            http_status = response_metadata.get("HTTPStatusCode")
+            if error_code in {"404", "NoSuchKey", "NotFound"} or http_status == 404:
+                return None
+            raise
         return StoredObject(
             size_bytes=result["ContentLength"],
             content_type=result.get("ContentType", "application/octet-stream"),

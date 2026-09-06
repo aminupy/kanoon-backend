@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
+import json
 import os
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 
 import uvicorn
 from sqlalchemy import select, text
@@ -120,6 +122,16 @@ def serve(import_string: str, *, host: str, port: int, reload: bool) -> None:
     )
 
 
+def export_openapi(output: str) -> None:
+    from app.main import app
+
+    destination = Path(output)
+    destination.write_text(
+        json.dumps(app.openapi(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="kanoon")
     commands = root.add_subparsers(dest="command", required=True)
@@ -134,6 +146,8 @@ def parser() -> argparse.ArgumentParser:
     data_command.add_argument("--reload", action="store_true")
     control_command = commands.add_parser("serve-control-plane")
     control_command.add_argument("--reload", action="store_true")
+    openapi_command = commands.add_parser("export-openapi")
+    openapi_command.add_argument("--output", default="openapi.json")
     return root
 
 
@@ -159,6 +173,8 @@ def main() -> None:
             port=settings.control_plane_port,
             reload=args.reload,
         )
+    elif args.command == "export-openapi":
+        export_openapi(args.output)
 
 
 if __name__ == "__main__":

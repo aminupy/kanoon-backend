@@ -118,6 +118,7 @@ class HonorCategory(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     description: Mapped[str | None] = mapped_column(Text)
     sort_order: Mapped[int] = mapped_column(nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Honor(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -173,6 +174,7 @@ class StaffMember(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     public_email: Mapped[str | None] = mapped_column(String(320))
     sort_order: Mapped[int] = mapped_column(nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ContactRequest(UUIDPrimaryKeyMixin, Base):

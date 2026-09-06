@@ -10,6 +10,7 @@ from app.content.admin_router import router as admin_content_router
 from app.content.public_router import router as public_content_router
 from app.core.config import Settings, get_settings
 from app.core.http_security import DynamicCORSMiddleware
+from app.core.openapi import install_openapi_contract
 from app.media.router import admin_router as admin_media_router
 from app.media.router import public_router as public_media_router
 from app.media.storage import ObjectStorage, S3ObjectStorage
@@ -80,6 +81,7 @@ def create_app(
     app.include_router(admin_site_build_router)
     app.include_router(admin_registrations_router)
     app.include_router(internal_site_build_router)
+    install_openapi_contract(app)
 
     return app
 

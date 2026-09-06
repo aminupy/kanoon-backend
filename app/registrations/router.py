@@ -236,6 +236,12 @@ async def complete_profile_image_upload(
         return media
     storage: ObjectStorage = request.app.state.object_storage
     stored = await storage.inspect(object_key=media.object_key)
+    if stored is None:
+        raise ApplicationError(
+            "MEDIA_OBJECT_NOT_UPLOADED",
+            "The uploaded object is not available yet.",
+            status_code=409,
+        )
     if stored.size_bytes != media.size_bytes or stored.content_type != media.mime_type:
         raise ApplicationError(
             "MEDIA_UPLOAD_MISMATCH",

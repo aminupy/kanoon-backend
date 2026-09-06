@@ -21,7 +21,9 @@ More detail: [architecture](docs/architecture.md), [multi-tenancy](docs/multiten
 [registration](docs/registration-flow.md), [payments](docs/payment-flow.md), and
 [security](docs/security.md). Blog lifecycle and durable Astro projection details are in
 [blog](docs/blog.md) and [static-site builds](docs/static-site-builds.md).
-HTTP process/network composition is documented in [deployment](docs/deployment.md).
+HTTP process/network composition is documented in [deployment](docs/deployment.md). The complete
+push-to-production workflow and its GitHub variables/secrets are in
+[GitHub Actions production CI/CD](docs/github-cicd.md).
 
 ## Local setup
 
@@ -33,11 +35,11 @@ cp .env.example .env
 docker compose up -d postgres
 uv sync --frozen --all-groups
 uv run alembic upgrade head
-KANOON_BOOTSTRAP_PASSWORD='use-a-random-development-value' uv run kanoon bootstrap \
-  --email admin@example.test \
+KANOON_BOOTSTRAP_PASSWORD='1qaz!QAZ1qaz!QAZ' uv run kanoon bootstrap \
+  --email aryan@gmail.com \
   --tenant-name 'Development School' \
   --tenant-slug development-school \
-  --tenant-domain school.localhost
+  --tenant-domain kanoon.esaminu.ir
 make run
 # In a second terminal:
 make run-control

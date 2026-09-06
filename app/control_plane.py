@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from app.application import create_base_app, install_common_middleware
 from app.auth.router import platform_auth_router
 from app.core.config import Settings, get_settings
+from app.core.openapi import install_openapi_contract
 from app.tenancy.platform_router import router as platform_tenants_router
 
 
@@ -19,6 +20,7 @@ def create_control_plane_app(settings: Settings | None = None) -> FastAPI:
     install_common_middleware(application)
     application.include_router(platform_auth_router)
     application.include_router(platform_tenants_router)
+    install_openapi_contract(application)
     return application
 
 

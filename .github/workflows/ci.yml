@@ -226,13 +226,29 @@ jobs:
           setup-key: ${{ secrets.NETBIRD_SETUP_KEY }}
           management-url: https://netbird.abhp.ir
           hostname: gha-kanoon-${{ github.run_id }}-${{ github.run_attempt }}
-
+      
+      - name: Wait for NetBird to establish connection
+        shell: bash
+        run: |
+          echo "Waiting for NetBird connection..."
+          for i in {1..60}; do
+            if sudo netbird status 2>/dev/null | grep -q "Connected"; then
+              echo "✓ NetBird connected successfully"
+              sleep 3
+              exit 0
+            fi
+            echo "Attempt $i/60..."
+            sleep 1
+          done
+          echo "✗ NetBird connection timeout"
+          exit 1
+      
       - name: Verify private deployment connectivity
         shell: bash
         run: |
           echo "Resolving deployment host..."
           getent ahostsv4 "$DEPLOY_HOST"
-
+      
           echo "Testing SSH over NetBird..."
           nc -vz -w5 "$DEPLOY_HOST" "$DEPLOY_PORT"
 

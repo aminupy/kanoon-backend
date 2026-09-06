@@ -77,10 +77,6 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-    ports:
-      # The host reverse proxy is the only intended caller. Do not publish this
-      # as 0.0.0.0:8000 unless an external firewall/proxy design explicitly requires it.
-      - 127.0.0.1:${KANOON_DATA_PLANE_PORT:-8000}:8000
     healthcheck:
       test:
         - CMD

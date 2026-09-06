@@ -254,17 +254,35 @@ jobs:
           management-url: https://netbird.abhp.ir
           hostname: gha-kanoon-${{ github.run_id }}-${{ github.run_attempt }}
       
-      - name: Wait for NetBird connection
+      - name: Wait for NetBird connection to fully establish
         shell: bash
         run: |
-          for i in {1..30}; do
+          echo "Waiting for NetBird to fully establish..."
+          for i in {1..60}; do
             if sudo netbird status | grep -q "Connected"; then
-              echo "NetBird connected"
+              echo "NetBird connected, waiting for routing to stabilize..."
+              sleep 5
               exit 0
             fi
+            echo "Attempt $i/60..."
             sleep 1
           done
           echo "NetBird connection timeout"
+          exit 1
+
+      - name: Verify SSH connectivity to deployment host
+        shell: bash
+        run: |
+          echo "Testing SSH connectivity to $DEPLOY_HOST:$DEPLOY_PORT..."
+          for i in {1..30}; do
+            if nc -vz -w3 "$DEPLOY_HOST" "$DEPLOY_PORT" 2>&1; then
+              echo "SSH port is accessible"
+              exit 0
+            fi
+            echo "Attempt $i/30 - SSH not yet ready, waiting..."
+            sleep 2
+          done
+          echo "SSH connectivity check failed"
           exit 1
 
       - name: Validate deployment inputs
@@ -312,9 +330,7 @@ jobs:
         run: |
           : "${GHCR_DEPLOY_TOKEN:?Set GHCR_DEPLOY_TOKEN in the production environment}"
           target="${DEPLOY_USER}@${DEPLOY_HOST}"
-          ssh_args=(-i "$HOME/.ssh/kanoon_deploy" -p "$DEPLOY_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes)
-          # The validated username intentionally expands on the runner.
-          # shellcheck disable=SC2029
+          ssh_args=(-i "$HOME/.ssh/kanoon_deploy" -p "$DEPLOY_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new -vvv)
           printf '%s' "$GHCR_DEPLOY_TOKEN" | ssh "${ssh_args[@]}" "$target" \
             "docker login ghcr.io --username '$GHCR_DEPLOY_USERNAME' --password-stdin"
 

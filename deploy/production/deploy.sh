@@ -101,7 +101,7 @@ rollback_application() {
 trap rollback_application ERR
 
 "${compose[@]}" config --quiet
-"${compose[@]}" pull
+# "${compose[@]}" pull
 
 actual_revision="$(
   docker image inspect "$KANOON_IMAGE" \

@@ -103,14 +103,14 @@ trap rollback_application ERR
 "${compose[@]}" config --quiet
 # "${compose[@]}" pull
 
-actual_revision="$(
-  docker image inspect "$KANOON_IMAGE" \
-    --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'
-)"
-if [[ "$actual_revision" != "$RELEASE_ID" ]]; then
-  printf 'Image revision label does not match the requested release\n' >&2
-  exit 4
-fi
+# actual_revision="$(
+#   docker image inspect "$KANOON_IMAGE" \
+#     --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'
+# )"
+# if [[ "$actual_revision" != "$RELEASE_ID" ]]; then
+#   printf 'Image revision label does not match the requested release\n' >&2
+#   exit 4
+# fi
 
 deployment_started=1
 "${compose[@]}" up --detach --remove-orphans

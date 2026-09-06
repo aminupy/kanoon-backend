@@ -49,9 +49,9 @@ apply to the data-plane composition entrypoint.
 `docker-compose.production.yml` is the standalone production topology. It uses the
 `postgres:18-alpine` image pinned by digest, a one-shot Alembic migration job, the data plane, the
 loopback-only control plane, and the site-build worker. PostgreSQL has no published host port. The
-data plane is also bound to host loopback for a host-managed reverse proxy. Update the PostgreSQL
-digest only as a reviewed infrastructure change with a backup and restore test; application pushes
-must not silently upgrade the database image.
+data plane has no host port and is reachable only by the Caddy container on the external `gateway`
+network as `backend:8000`. Update the PostgreSQL digest only as a reviewed infrastructure change
+with a backup and restore test; application pushes must not silently upgrade the database image.
 
 PostgreSQL 18 uses `/var/lib/postgresql/18/docker` as `PGDATA` and declares its volume at
 `/var/lib/postgresql`; the production Compose file therefore mounts its named volume at the parent
@@ -73,9 +73,9 @@ contain only the restricted runtime DSN and application settings. URL-encode res
 characters inside both DSNs. Use different, randomly generated passwords of at least 24 characters
 for the owner and runtime roles. Never place the owner DSN in the application environment file.
 
-Set `KANOON_IMAGE` to an immutable application image digest. Replace every placeholder and verify
-that the image wires concrete production OTP and payment adapters; the repository intentionally
-refuses to start the data plane with mocks in production.
+Set `KANOON_IMAGE` to an immutable application image digest or commit-SHA tag. Replace every
+placeholder and verify that the image wires concrete production OTP and payment adapters; the
+repository intentionally refuses to start the data plane with mocks in production.
 
 Validate and start the stack:
 

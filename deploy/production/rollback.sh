@@ -50,7 +50,7 @@ done
 
 rollback_image="$(sed -n 's/^KANOON_IMAGE=//p' "$release_env")"
 rollback_revision="$(sed -n 's/^RELEASE_ID=//p' "$release_env")"
-[[ "$KANOON_IMAGE" =~ ^(ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}|kanoon-backend:sha-[a-f0-9]{40})$ ]]
+[[ "$rollback_image" =~ ^(ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}|kanoon-backend:sha-[a-f0-9]{40})$ ]]
 [[ "$rollback_revision" =~ ^[a-f0-9]{40}$ ]]
 
 touch "$lock_file"
@@ -70,7 +70,11 @@ compose=(
   --file "$compose_file"
 )
 "${compose[@]}" config --quiet
-"${compose[@]}" pull backend backend-control-plane site-build-worker
+if [[ "$rollback_image" == ghcr.io/* ]]; then
+  "${compose[@]}" pull backend backend-control-plane site-build-worker
+else
+  docker image inspect "$rollback_image" >/dev/null
+fi
 
 actual_revision="$(
   docker image inspect "$rollback_image" \
@@ -95,6 +99,7 @@ for attempt in {1..30}; do
 done
 
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   --volume "$rollback_release:/release:ro" \
   "$rollback_image" \
   python /release/deploy/production/verify_openapi.py \

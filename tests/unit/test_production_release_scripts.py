@@ -108,6 +108,7 @@ def test_manual_rollback_swaps_release_links_without_migrating(tmp_path: Path) -
     (root / "previous").symlink_to(previous)
     binary_directory, log_path = _fake_runtime(tmp_path)
     environment = _environment(root, binary_directory, log_path, previous_revision, "2")
+    environment.pop("KANOON_IMAGE")
 
     completed = subprocess.run(  # noqa: S603
         [str(ROLLBACK_SCRIPT)],

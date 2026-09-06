@@ -32,7 +32,7 @@ OUT = Path(__file__).resolve().parent
 SPEC_PATH = ROOT / "openapi.json"
 SPEC = json.loads(SPEC_PATH.read_text())
 STARTED = datetime.now(UTC)
-RUN_ID = f"kanoon-e2e-{STARTED:%Y%m%dT%H%M%SZ}-{secrets.token_hex(3)}"
+RUN_ID = f"kanoon-fix-e2e-{STARTED:%Y%m%dT%H%M%SZ}-{secrets.token_hex(3)}"
 UUID_ZERO = "00000000-0000-4000-8000-000000000001"
 TOKEN_KEYS = {"authorization", "access_token", "refresh_token", "draft_token", "password"}
 LEAK_PATTERNS = ("traceback", "sqlalchemy", "psycopg", "/app/", "/home/", "secret_key")
@@ -223,14 +223,17 @@ class Runner:
                     error_quality.append("error response lacks standard code/message/request_id fields")
 
         schema_errors: list[str] = []
-        if response is not None and validate_contract:
+        # Contract validation is mandatory for both success and error responses. The argument is
+        # retained for compatibility with historical runner calls but can no longer disable it.
+        del validate_contract
+        if response is not None and kind != "edge":
             schema_errors = self.validate_schema(op_id, response.status_code, parsed)
             for err in schema_errors:
                 self.contract_violations.append(
                     {"test_id": test_id, "operation_id": op_id, "status": response.status_code, "detail": err}
                 )
 
-        result = "PASS" if expected_ok and not error_quality and not (schema_errors and kind == "positive") else "FAIL"
+        result = "PASS" if expected_ok and not error_quality and not schema_errors else "FAIL"
         failure_id = None
         if result == "FAIL":
             failure_id = f"FAIL-{len(self.findings) + 1:03d}"
@@ -319,7 +322,16 @@ class Runner:
         for n, (path, op_id) in enumerate(
             [("/health/live", "live_health_live_get"), ("/health/ready", "ready_health_ready_get")], 1
         ):
-            self.request(f"HEALTH-{n:03d}", op_id, f"GET {path} succeeds with JSON health state", "GET", path, kind="positive", expected={200})
+            response, _ = self.request(f"HEALTH-{n:03d}", op_id, f"GET {path} succeeds with JSON health state", "GET", path, kind="positive", expected={200})
+            if path == "/health/ready" and response is not None:
+                self.environment["deployed_revision"] = next(
+                    (
+                        response.headers[name]
+                        for name in ("x-deployed-revision", "x-revision", "x-app-version")
+                        if name in response.headers
+                    ),
+                    "unavailable",
+                )
         t0 = time.perf_counter()
         remote = self.client.get("/openapi.json")
         self.environment["openapi_status"] = remote.status_code
@@ -748,7 +760,7 @@ class Runner:
         media_id = body["media_id"]
         self.profile_media_id = media_id
         self.ledger["media"].append({"id": media_id, "visibility": "PRIVATE", "filename": request_body["filename"]})
-        self.request("MEDIA-PROFILE-002", complete_op, "Completion before object upload is rejected without 5xx", "POST", registration_path + f"/profile-image/{media_id}/complete", kind="negative", expected={404, 422}, headers=auth, body={"sha256": digest, "width": 1, "height": 1}, validate_contract=False)
+        self.request("MEDIA-PROFILE-002", complete_op, "Completion before object upload is rejected without 5xx", "POST", registration_path + f"/profile-image/{media_id}/complete", kind="negative", expected={409}, headers=auth, body={"sha256": digest, "width": 1, "height": 1})
         try:
             upload = httpx.post(body["upload_url"], data=body["form_fields"], files={"file": (request_body["filename"], png, "image/png")}, timeout=30)
             self.tests.append({"test_id": "MEDIA-PROFILE-003", "timestamp": datetime.now(UTC).isoformat(), "operation_id": init_op, "scenario": "Upload bytes to presigned object-storage endpoint", "kind": "integration", "result": "PASS" if upload.status_code in {200, 201, 204} else "FAIL", "timing_ms": round(upload.elapsed.total_seconds()*1000,2), "status_code": upload.status_code, "method": "POST", "path": "<redacted-presigned-upload-url>", "failure_id": None, "notes": f"bytes={len(png)}"})
@@ -831,14 +843,98 @@ class Runner:
         self.admin_blog_workflow(headers)
         self.admin_reads(headers)
 
-        # A lossless restore is impossible when the initial public profile is null: the PUT schema
-        # requires a profile and no delete/reset operation exists. Do not mutate it.
         profile_op = "replace_school_profile_api_v1_admin_school_profile_put"
-        self.blocked(
-            profile_op,
-            "Reversible school-profile replacement",
-            "Initial profile is null and the API has no lossless restore-to-null operation.",
+        reset_op = "reset_school_profile_api_v1_admin_school_profile_delete"
+        site_op = "site_bootstrap_api_v1_public_site_get"
+        initial_response, initial_site = self.request(
+            "PROFILE-001",
+            site_op,
+            "Read school profile before reversible mutation",
+            "GET",
+            "/api/v1/public/site",
+            kind="positive",
+            expected={200},
         )
+        if initial_response is None or not isinstance(initial_site, dict):
+            self.blocked(profile_op, "Reversible school-profile replacement", "Initial profile could not be read.")
+            self.blocked(reset_op, "Lossless school-profile reset", "Initial profile could not be read.")
+        elif initial_site.get("profile") is not None:
+            reason = (
+                "The existing non-null public projection omits administrative sort-order fields, "
+                "so a provably lossless restore is unavailable."
+            )
+            self.blocked(profile_op, "Reversible school-profile replacement", reason)
+            self.blocked(reset_op, "Lossless school-profile reset", reason)
+        else:
+            temporary_profile = {
+                "profile": {
+                    "display_name": f"{RUN_ID} temporary profile",
+                    "description": "Run-owned reversible profile verification",
+                },
+                "addresses": [{"label": "Test", "address": f"{RUN_ID} address"}],
+                "phones": [{"label": "Test", "phone_number": "02100000000"}],
+                "social_links": [
+                    {"platform": "test", "url": "https://example.test/kanoon-e2e"}
+                ],
+            }
+            replaced, _ = self.request(
+                "PROFILE-002",
+                profile_op,
+                "Replace initially-null school profile with run-owned values",
+                "PUT",
+                "/api/v1/admin/school-profile",
+                kind="positive",
+                expected={204},
+                headers=headers,
+                body=temporary_profile,
+            )
+            if replaced is not None and replaced.status_code == 204:
+                self.request(
+                    "PROFILE-003",
+                    site_op,
+                    "Run-owned school profile is publicly visible",
+                    "GET",
+                    "/api/v1/public/site",
+                    kind="integration",
+                    expected={200},
+                )
+            reset, _ = self.request(
+                "PROFILE-004",
+                reset_op,
+                "Reset run-owned school profile to the original null state",
+                "DELETE",
+                "/api/v1/admin/school-profile",
+                kind="positive",
+                expected={204},
+                headers=headers,
+            )
+            if reset is not None and reset.status_code == 204:
+                restored, restored_body = self.request(
+                    "PROFILE-005",
+                    site_op,
+                    "School profile reset restores the original null projection",
+                    "GET",
+                    "/api/v1/public/site",
+                    kind="integration",
+                    expected={200},
+                )
+                if restored is not None and isinstance(restored_body, dict):
+                    restored_empty = (
+                        restored_body.get("profile") is None
+                        and restored_body.get("addresses") == []
+                        and restored_body.get("phones") == []
+                        and restored_body.get("social_links") == []
+                    )
+                    if not restored_empty:
+                        self.mark_coverage(
+                            reset_op,
+                            "FAIL",
+                            integration="FAIL",
+                            reason="Reset did not restore the original null public projection.",
+                        )
+            self.ledger["school_profile"].append(
+                {"name": temporary_profile["profile"]["display_name"], "cleanup_state": "RESET"}
+            )
 
     def admin_upload_asset(
         self, headers: dict[str, str], asset_key: str, visibility: str
@@ -892,7 +988,7 @@ class Runner:
                 "POST",
                 f"/api/v1/admin/media/uploads/{media_id}/complete",
                 kind="negative",
-                expected={404, 422},
+                expected={409},
                 headers=headers,
                 body={"sha256": hashlib.sha256(payload).hexdigest(), **dimensions},
                 validate_contract=False,
@@ -1379,8 +1475,8 @@ class Runner:
 
     def tenant_checks(self) -> None:
         site_op = "site_bootstrap_api_v1_public_site_get"
-        response, _ = self.request("TENANT-001", site_op, "Unknown Host does not fall back to tenant", "GET", "/api/v1/public/site", kind="negative", expected={404}, headers={"Host": "unauthorized.invalid"}, validate_contract=False)
-        if response and response.status_code == 404:
+        response, _ = self.request("TENANT-001", site_op, "Unknown Host does not fall back to tenant", "GET", "/api/v1/public/site", kind="edge", expected={404, 421}, headers={"Host": "unauthorized.invalid"}, validate_contract=False)
+        if response and response.status_code in {404, 421}:
             self.environment["unknown_host_rejected"] = True
         self.environment["cross_tenant_positive_test"] = "BLOCKED: no second explicitly authorized tenant/domain or credentials were available"
 
@@ -1397,7 +1493,13 @@ class Runner:
         for kind, rows in self.ledger.items():
             for row in rows:
                 state = row.get("cleanup_state") or row.get("status")
-                if state not in {"ARCHIVED", "ARCHIVED_OR_INACTIVE", "CANCELLED", "CLOSED"}:
+                if state not in {
+                    "ARCHIVED",
+                    "ARCHIVED_OR_INACTIVE",
+                    "CANCELLED",
+                    "CLOSED",
+                    "RESET",
+                }:
                     remaining.append({"kind": kind, **row})
         return {
             "attempted": bool(self.ledger),
@@ -1419,6 +1521,7 @@ class Runner:
         result = {
             "run_id": RUN_ID,
             "base_url": BASE_URL,
+            "deployed_revision": self.environment.get("deployed_revision", "unavailable"),
             "started": STARTED.isoformat(),
             "finished": finished.isoformat(),
             "total_operations": len(OPS),
@@ -1431,6 +1534,14 @@ class Runner:
             "environment": self.environment,
             "deployed_openapi_matches_supplied": self.remote_openapi_equal,
             "operation_coverage": list(self.coverage.values()),
+            "operation_inventory": [
+                {
+                    "operation_id": operation_id,
+                    "method": operation["method"],
+                    "path": operation["path"],
+                }
+                for operation_id, operation in OPS.items()
+            ],
             "tests": self.tests,
             "failures": self.findings,
             "contract_violations": self.contract_violations,

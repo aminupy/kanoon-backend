@@ -21,18 +21,27 @@ def test_ci_runs_complete_postgres_18_and_storage_gates() -> None:
     assert "push: false" in workflow
 
 
-def test_actions_are_commit_pinned_and_production_deploys_only_main_digest() -> None:
+def test_actions_are_commit_pinned_and_production_deploys_only_main_image() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    dockerfile = (ROOT / "Dockerfile").read_text()
     actions = re.findall(r"uses:\s+([^\s#]+)", workflow)
 
     assert actions
     assert all(re.fullmatch(r"[^@]+@[a-f0-9]{40}", action) for action in actions)
     assert "github.event_name == 'push' && github.ref == 'refs/heads/main'" in workflow
-    assert "image_ref=${IMAGE_NAME}@${IMAGE_DIGEST}" in workflow
+    assert "needs: quality" in workflow
+    assert "tags: kanoon-backend:sha-${{ github.sha }}" in workflow
+    assert "build-args: VCS_REF=${{ github.sha }}" in workflow
+    assert "docker save --output" in workflow
+    assert "sha256sum --check" in workflow
+    assert "docker load --input" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "secrets.DEPLOY_SSH_PRIVATE_KEY" in workflow
     assert "secrets.DEPLOY_SSH_KNOWN_HOSTS" in workflow
-    assert "secrets.GHCR_DEPLOY_TOKEN" in workflow
+    assert "secrets.NETBIRD_SETUP_KEY" in workflow
+    assert "secrets.GHCR_DEPLOY_TOKEN" not in workflow
+    assert "ARG VCS_REF=unknown" in dockerfile
+    assert "LABEL org.opencontainers.image.revision=$VCS_REF" in dockerfile
 
 
 def test_host_deployment_is_locked_migration_gated_and_forward_only() -> None:

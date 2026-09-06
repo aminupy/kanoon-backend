@@ -199,16 +199,20 @@ class AdminContentService:
         actor_user_id: uuid.UUID,
         body: ProfileContactsWrite,
     ) -> TenantProfile:
-        profile = await session.scalar(select(TenantProfile).with_for_update())
+        profile = await session.scalar(
+            select(TenantProfile).where(TenantProfile.tenant_id == tenant_id).with_for_update()
+        )
         if profile is None:
             profile = TenantProfile(tenant_id=tenant_id, **schema_values(body.profile))
             session.add(profile)
         else:
             for key, value in schema_values(body.profile).items():
                 setattr(profile, key, value)
-        await session.execute(delete(TenantAddress))
-        await session.execute(delete(TenantPhone))
-        await session.execute(delete(TenantSocialLink))
+        await session.execute(delete(TenantAddress).where(TenantAddress.tenant_id == tenant_id))
+        await session.execute(delete(TenantPhone).where(TenantPhone.tenant_id == tenant_id))
+        await session.execute(
+            delete(TenantSocialLink).where(TenantSocialLink.tenant_id == tenant_id)
+        )
         session.add_all(
             TenantAddress(tenant_id=tenant_id, **schema_values(item)) for item in body.addresses
         )
@@ -229,6 +233,35 @@ class AdminContentService:
             entity_id=profile.id,
         )
         return profile
+
+    async def reset_profile(
+        self,
+        session: AsyncSession,
+        *,
+        tenant_id: uuid.UUID,
+        actor_user_id: uuid.UUID,
+    ) -> None:
+        profile = await session.scalar(
+            select(TenantProfile).where(TenantProfile.tenant_id == tenant_id).with_for_update()
+        )
+        await session.execute(delete(TenantAddress).where(TenantAddress.tenant_id == tenant_id))
+        await session.execute(delete(TenantPhone).where(TenantPhone.tenant_id == tenant_id))
+        await session.execute(
+            delete(TenantSocialLink).where(TenantSocialLink.tenant_id == tenant_id)
+        )
+        if profile is None:
+            return
+        profile_id = profile.id
+        await session.delete(profile)
+        await self.audit(
+            session,
+            tenant_id=tenant_id,
+            actor_user_id=actor_user_id,
+            action="tenant_profile.reset",
+            entity_type="tenant_profile",
+            entity_id=profile_id,
+        )
+        await session.flush()
 
     async def add_gallery_item(
         self,

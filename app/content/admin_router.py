@@ -529,6 +529,22 @@ async def replace_school_profile(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.delete(
+    "/school-profile", status_code=204, dependencies=[Depends(require_feature("school_profile"))]
+)
+async def reset_school_profile(
+    tenant: TenantContext = Depends(tenant_context_from_request),
+    principal: Principal = Depends(require_permission(Permission.PROFILE_WRITE)),
+    session: AsyncSession = Depends(tenant_session),
+) -> Response:
+    await AdminContentService().reset_profile(
+        session,
+        tenant_id=tenant.tenant_id,
+        actor_user_id=principal.user_id,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get(
     "/contact-requests",
     response_model=Page[ContactRequestAdmin],

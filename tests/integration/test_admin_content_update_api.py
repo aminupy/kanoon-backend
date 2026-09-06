@@ -463,6 +463,48 @@ async def test_admin_content_update_publish_archive_lifecycle(
     await context["app"].state.database.dispose()
 
 
+async def test_school_profile_can_be_replaced_and_losslessly_reset(
+    admin_content_context: dict[str, Any],
+) -> None:
+    context = admin_content_context
+    transport = httpx.ASGITransport(app=context["app"])
+    profile = {
+        "profile": {"display_name": "Disposable school", "description": "Temporary profile"},
+        "addresses": [{"label": "Main", "address": "Test address"}],
+        "phones": [{"label": "Office", "phone_number": "02100000000"}],
+        "social_links": [{"platform": "website", "url": "https://example.test"}],
+    }
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        initial = await client.get("/api/v1/public/site", headers=context["public_headers"])
+        assert initial.status_code == 200
+        assert initial.json()["profile"] is None
+
+        replaced = await client.put(
+            "/api/v1/admin/school-profile", headers=context["headers"], json=profile
+        )
+        assert replaced.status_code == 204
+        visible = await client.get("/api/v1/public/site", headers=context["public_headers"])
+        assert visible.status_code == 200
+        assert visible.json()["profile"]["display_name"] == "Disposable school"
+        assert len(visible.json()["addresses"]) == 1
+        assert len(visible.json()["phones"]) == 1
+        assert len(visible.json()["social_links"]) == 1
+
+        reset = await client.delete("/api/v1/admin/school-profile", headers=context["headers"])
+        assert reset.status_code == 204
+        restored = await client.get("/api/v1/public/site", headers=context["public_headers"])
+        assert restored.status_code == 200
+        assert restored.json()["profile"] is None
+        assert restored.json()["addresses"] == []
+        assert restored.json()["phones"] == []
+        assert restored.json()["social_links"] == []
+
+        repeated = await client.delete("/api/v1/admin/school-profile", headers=context["headers"])
+        assert repeated.status_code == 204
+
+    await context["app"].state.database.dispose()
+
+
 async def test_gallery_item_invalid_album_and_media_are_structured_client_errors(
     admin_content_context: dict[str, Any],
 ) -> None:

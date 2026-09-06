@@ -4,6 +4,7 @@ import os
 import uuid
 from datetime import UTC, datetime
 from functools import partial
+from urllib.parse import parse_qs, urlsplit
 
 import anyio
 import httpx
@@ -45,6 +46,8 @@ async def test_real_s3_presigned_upload_inspect_download_and_cleanup() -> None:
             mime_type="image/png",
             max_bytes=1024,
         )
+        assert upload.fields["x-amz-algorithm"] == "AWS4-HMAC-SHA256"
+        assert "AWSAccessKeyId" not in upload.fields
         async with httpx.AsyncClient(follow_redirects=False) as client:
             uploaded = await client.post(
                 upload.url,
@@ -63,6 +66,10 @@ async def test_real_s3_presigned_upload_inspect_download_and_cleanup() -> None:
                 filename="fixture.png",
                 disposition="inline",
             )
+            download_query = parse_qs(urlsplit(signed_download).query)
+            assert download_query["X-Amz-Algorithm"] == ["AWS4-HMAC-SHA256"]
+            assert download_query["X-Amz-SignedHeaders"] == ["host"]
+            assert "AWSAccessKeyId" not in download_query
             downloaded = await client.get(signed_download)
             assert downloaded.status_code == 200
             assert downloaded.content == PNG_BYTES

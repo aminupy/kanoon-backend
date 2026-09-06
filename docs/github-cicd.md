@@ -1,8 +1,9 @@
 # GitHub Actions production CI/CD
 
 The workflow in `.github/workflows/ci.yml` tests every push and pull request. A push to `main`
-continues only after all gates pass: it builds the application image, publishes it to GHCR with an
-immutable digest, and deploys that exact digest to production. Pull requests and non-`main`
+continues only after all gates pass: it builds an image tagged with the immutable commit SHA,
+checksums the exported image archive, transfers it over the private deployment network, verifies
+the checksum, and loads that exact image on the production host. Pull requests and non-`main`
 branches never receive production credentials and never deploy.
 
 The `production` GitHub Environment should be restricted to the `main` branch. Enable required
@@ -25,7 +26,6 @@ Create a GitHub Environment named `production` and add these environment variabl
 | `DEPLOY_HEALTH_URL` | `https://kanoon.esaminu.ir/health/ready` | Public readiness URL checked after deployment and rollback. |
 | `DEPLOY_OPENAPI_URL` | `https://kanoon.esaminu.ir/openapi.json` | Deployed contract compared canonically with the committed contract. |
 | `DEPLOY_KEEP_RELEASES` | `5` | Release directories retained on the host; allowed range is 2–50. |
-| `GHCR_DEPLOY_USERNAME` | `aminupy` | GitHub account that owns the read-only package token. |
 
 Values are validated before any SSH connection. Hostnames, paths, URLs, image references, and
 counts deliberately accept a narrow character set so an altered repository variable cannot inject
@@ -43,7 +43,6 @@ gh variable set DEPLOY_PATH --env production --body /opt/kanoon
 gh variable set DEPLOY_HEALTH_URL --env production --body https://kanoon.esaminu.ir/health/ready
 gh variable set DEPLOY_OPENAPI_URL --env production --body https://kanoon.esaminu.ir/openapi.json
 gh variable set DEPLOY_KEEP_RELEASES --env production --body 5
-gh variable set GHCR_DEPLOY_USERNAME --env production --body aminupy
 ```
 
 ## GitHub Environment secrets
@@ -54,7 +53,7 @@ Add exactly these secrets under **Settings → Environments → production → E
 | --- | --- |
 | `DEPLOY_SSH_PRIVATE_KEY` | Complete private half of a dedicated Ed25519 deployment key. Do not add a passphrase because the non-interactive runner cannot unlock it. |
 | `DEPLOY_SSH_KNOWN_HOSTS` | Pinned `known_hosts` line for `DEPLOY_HOST` and `DEPLOY_PORT`, captured through a trusted channel and verified against the server host-key fingerprint. |
-| `GHCR_DEPLOY_TOKEN` | Package-read token for `GHCR_DEPLOY_USERNAME`; grant only the access needed to pull `ghcr.io/aminupy/kanoon-backend`. |
+| `NETBIRD_SETUP_KEY` | Ephemeral/reusable setup key restricted to the deployment network and rotated according to the network policy. |
 
 Load secret values from protected files or standard input; never put a secret in `--body`, where it
 would enter shell history and the process argument list:
@@ -62,11 +61,11 @@ would enter shell history and the process argument list:
 ```bash
 gh secret set DEPLOY_SSH_PRIVATE_KEY --env production < /secure/path/kanoon-deploy-key
 gh secret set DEPLOY_SSH_KNOWN_HOSTS --env production < /secure/path/kanoon-known-hosts
-gh secret set GHCR_DEPLOY_TOKEN --env production < /secure/path/ghcr-read-token
+gh secret set NETBIRD_SETUP_KEY --env production < /secure/path/netbird-setup-key
 ```
 
-`GITHUB_TOKEN` is created automatically for each workflow run and publishes the image; do not add
-it yourself. The PostgreSQL, signing, and MinIO values in the quality job are disposable CI-only
+`GITHUB_TOKEN` is created automatically for each workflow run; do not add it yourself. The
+PostgreSQL, signing, and MinIO values in the quality job are disposable CI-only
 credentials scoped to isolated runner services. They are intentionally not GitHub secrets and
 must never be reused outside CI.
 
@@ -75,11 +74,6 @@ user's `authorized_keys`. Generate `DEPLOY_SSH_KNOWN_HOSTS` on a trusted operato
 the server console, then compare the fingerprint with the server's host public key before adding
 it to GitHub. The workflow intentionally does not run `ssh-keyscan`, because accepting a key during
 the deployment would defeat host verification.
-
-For a private GHCR package, use a token accepted by GitHub Packages with package read access. If
-the account requires SSO authorization, authorize the token for the organization. The token is
-piped over SSH to `docker login --password-stdin`; it is never placed in a process argument or a
-release file.
 
 ## One-time production-host preparation
 
@@ -111,7 +105,7 @@ The Compose environment contains:
 
 | Classification | Names |
 | --- | --- |
-| Non-secret | `KANOON_DATA_PLANE_PORT`, `KANOON_CONTROL_PLANE_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `KANOON_DB_APP_USER` |
+| Non-secret | `KANOON_CONTROL_PLANE_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `KANOON_DB_APP_USER` |
 | Secret | `POSTGRES_PASSWORD`, `KANOON_DB_APP_PASSWORD`, `KANOON_MIGRATION_DATABASE_DSN` |
 | Managed by deployment | `KANOON_IMAGE`, `KANOON_APP_ENV_FILE` |
 
@@ -128,16 +122,16 @@ using an independently tested process before enabling the first automatic deploy
 
 ## What a deployment does
 
-Each successful `main` push produces `ghcr.io/aminupy/kanoon-backend@sha256:…`; tags are published
-for operator convenience, but deployment uses only the digest. The workflow sends a small release
-bundle containing Compose, the database initializer, the deployment verifier, and the committed
-OpenAPI document. It never sends an environment file.
+Each successful `main` push produces `kanoon-backend:sha-<40-character-commit>`, labels it with the
+same source revision, exports it once, and verifies the archive checksum before and after transfer.
+The workflow sends a small release bundle containing Compose, the database initializer, the
+deployment verifier, and the committed OpenAPI document. It never sends an environment file.
 
 The host script then:
 
 1. locks `/opt/kanoon/deploy.lock`;
 2. validates protected files and the Compose model;
-3. pulls the immutable image and verifies its OCI revision label against the Git commit;
+3. verifies the already-loaded immutable image's OCI revision label against the Git commit;
 4. runs Alembic through Compose before allowing dependent services to start;
 5. waits for production readiness;
 6. compares deployed and committed OpenAPI documents canonically;
@@ -148,7 +142,7 @@ If an application, health, or OpenAPI check fails after rollout starts, the scri
 previous application image. It does not automatically downgrade the database. Every migration must
 therefore be backward-compatible with the immediately preceding application release (expand,
 deploy, then contract in a later release). A database restore remains an explicit operator action.
-On the first managed release, no safe previous digest exists; a failed application is stopped
+On the first managed release, no safe previous image exists; a failed application is stopped
 instead of being left online.
 
 ## Required preflight before enabling automatic deployment

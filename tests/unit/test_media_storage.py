@@ -1,5 +1,5 @@
 import secrets
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from botocore.exceptions import ClientError
@@ -35,10 +35,18 @@ async def test_presigned_urls_use_public_endpoint_while_operations_use_internal_
     assert storage.presign_client.meta.endpoint_url == "https://storage.example.com"
     assert urlsplit(upload.url).scheme == "https"
     assert urlsplit(upload.url).netloc == "storage.example.com"
+    assert urlsplit(upload.url).path == "/kanoon"
     assert urlsplit(download).scheme == "https"
     assert urlsplit(download).netloc == "storage.example.com"
+    assert urlsplit(download).path.startswith("/kanoon/")
     assert "storage.internal" not in upload.url
     assert "storage.internal" not in download
+    assert upload.fields["x-amz-algorithm"] == "AWS4-HMAC-SHA256"
+    assert "AWSAccessKeyId" not in upload.fields
+    download_query = parse_qs(urlsplit(download).query)
+    assert download_query["X-Amz-Algorithm"] == ["AWS4-HMAC-SHA256"]
+    assert download_query["X-Amz-SignedHeaders"] == ["host"]
+    assert "AWSAccessKeyId" not in download_query
 
 
 async def test_presigning_falls_back_to_internal_endpoint_outside_production() -> None:

@@ -45,9 +45,11 @@ def test_production_http_surfaces_are_loopback_only_and_database_isolated() -> N
     backend = service_block("backend", "backend-control-plane")
     control = service_block("backend-control-plane", "site-build-worker")
 
-    assert "127.0.0.1:${KANOON_DATA_PLANE_PORT:-8000}:8000" in backend
+    assert "ports:" not in backend
+    assert "- edge" in backend
     assert "127.0.0.1:${KANOON_CONTROL_PLANE_PORT:-8001}:8001" in control
     assert "database:\n    internal: true" in COMPOSE
+    assert "edge:\n    name: gateway\n    external: true" in COMPOSE
     assert "read_only: true" in COMPOSE
     assert "no-new-privileges:true" in COMPOSE
 

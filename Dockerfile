@@ -41,6 +41,10 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 # ─────────────────────────────────────────────────────────────
 FROM python:${PYTHON_VERSION}-slim-trixie AS runtime
 
+ARG VCS_REF=unknown
+
+LABEL org.opencontainers.image.revision=$VCS_REF
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:${PATH}"

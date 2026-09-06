@@ -7,6 +7,7 @@ from urllib.parse import quote, urlsplit
 
 import anyio
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 if TYPE_CHECKING:
@@ -15,6 +16,11 @@ else:
     S3Client = Any
 
 from app.core.config import Settings
+
+S3_CLIENT_CONFIG = Config(
+    signature_version="s3v4",
+    s3={"addressing_style": "path"},
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +72,7 @@ class S3ObjectStorage:
             region_name=settings.s3_region,
             aws_access_key_id=settings.s3_access_key.get_secret_value(),
             aws_secret_access_key=settings.s3_secret_key.get_secret_value(),
+            config=S3_CLIENT_CONFIG,
         )
         public_endpoint = settings.s3_public_endpoint_url or settings.s3_endpoint_url
         self.presign_client: S3Client
@@ -78,6 +85,7 @@ class S3ObjectStorage:
                 region_name=settings.s3_region,
                 aws_access_key_id=settings.s3_access_key.get_secret_value(),
                 aws_secret_access_key=settings.s3_secret_key.get_secret_value(),
+                config=S3_CLIENT_CONFIG,
             )
 
     async def ensure_bucket(self) -> None:

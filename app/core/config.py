@@ -102,8 +102,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def reject_unsafe_production_settings(self) -> Settings:
         if self.environment == "production":
-            # if self.otp_provider == "mock" or self.payment_provider == "mock":
-            #     raise ValueError("mock OTP/payment providers are forbidden in production")
+            if self.otp_provider == "mock" or self.payment_provider == "mock":
+                raise ValueError("mock OTP/payment providers are forbidden in production")
             if len(self.signing_key.get_secret_value()) < 32:
                 raise ValueError("production signing key must contain at least 32 characters")
             if len(self.site_build_hmac_secret.get_secret_value()) < 32:

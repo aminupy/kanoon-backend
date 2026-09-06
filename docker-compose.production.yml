@@ -2,7 +2,7 @@ name: kanoon-production
 
 x-application: &application
   image: ${KANOON_IMAGE:?set KANOON_IMAGE to an immutable image tag or digest}
-  pull_policy: always
+  # pull_policy: always
   env_file:
     - ${KANOON_APP_ENV_FILE:-.env.production.app}
   init: true
